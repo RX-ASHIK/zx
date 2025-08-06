@@ -1,5 +1,10 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, 
+    InlineKeyboardButton, 
+    InlineKeyboardMarkup,
+    WebAppInfo
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -10,201 +15,227 @@ from telegram.ext import (
     JobQueue
 )
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
+import random
+import pytz
 
 # Bot configuration
 BOT_TOKEN = "7641873839:AAHt4JsRYUMQDHrrEHdOB-No3ZrtJQeDxXc"
-ADMIN_ID = 5989402185  # Your admin ID
-CHANNEL_USERNAME = "EarningMasterbd24"  # Channel username without @
+ADMIN_ID = 5989402185
 CHANNEL_LINK = "https://t.me/EarningMasterbd24"
-MINI_APP_LINK = "https://earningmaster244.blogspot.com/?m=1"
+MINI_APP_URL = "https://earningmaster244.blogspot.com/?m=1"
 NOTIFICATION_INTERVAL = 300  # 5 minutes in seconds
+TIMEZONE = pytz.timezone('Asia/Dhaka')
 
-# Store user data (in production, use a proper database)
+# Premium notification messages
+NOTIFICATION_MESSAGES = [
+    "⏰ সময় এসেছে আয় বাড়ানোর! এখনই শুরু করুন:",
+    "💰 আপনার আয়ের সুযোগ অপেক্ষা করছে! শুরু করতে ক্লিক করুন:",
+    "🚀 আজকের আয়ের সেশন মিস করবেন না! শুরু করুন এখন:",
+    "💎 আপনার আয়ের সম্ভাবনা বৃদ্ধি করুন! এখনই এক্সেস নিন:",
+    "🤑 টাকা কামানোর সেরা সময় এখন! শুরু করতে ক্লিক করুন:"
+]
+
+# Store user data (in production use database)
 user_data = {}
-joined_users = set()
+active_users = set()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-async def send_notifications(context: ContextTypes.DEFAULT_TYPE):
-    """Send earning reminders to all users"""
+async def send_premium_notifications(context: ContextTypes.DEFAULT_TYPE):
+    """Send premium earning reminders to all active users"""
     try:
-        current_time = datetime.now()
+        current_time = datetime.now(TIMEZONE)
         notification_count = 0
         
-        for user_id, data in user_data.items():
+        for user_id in list(active_users):
             try:
-                # Skip if user hasn't joined channel
-                if not data.get('has_joined', False):
-                    continue
+                # Select random premium message
+                message = random.choice(NOTIFICATION_MESSAGES)
                 
-                # Prepare the notification message
-                message = (
-                    "🔄 <b>Earning Reminder</b> 🔄\n\n"
-                    "Don't forget to continue earning today!\n\n"
-                    f"👉 <a href='{MINI_APP_LINK}'>Click here to start earning now</a>\n\n"
-                    "The more you work, the more you earn! 💰"
-                )
+                # Create interactive button with WebApp
+                keyboard = [
+                    [InlineKeyboardButton(
+                        text="📲 অ্যাপে যান এখনই", 
+                        web_app=WebAppInfo(url=MINI_APP_URL)
+                    )]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                # Send the notification
+                # Send the premium notification
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=message,
-                    parse_mode="HTML",
+                    text=f"{message}\n\n{MINI_APP_URL}",
+                    reply_markup=reply_markup,
                     disable_web_page_preview=True
                 )
                 
-                # Update last notified time
-                user_data[user_id]['last_notified'] = current_time
                 notification_count += 1
-                
-                # Small delay to avoid hitting rate limits
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)  # Rate limit protection
                 
             except Exception as e:
-                logger.error(f"Failed to send notification to {user_id}: {e}")
-                # Remove inactive users
-                if "chat not found" in str(e).lower() or "user is deactivated" in str(e).lower():
+                logger.error(f"Notification failed for {user_id}: {e}")
+                if "chat not found" in str(e).lower():
+                    active_users.discard(user_id)
                     user_data.pop(user_id, None)
-                    joined_users.discard(user_id)
         
-        # Log notification stats
-        logger.info(f"Sent {notification_count} notifications at {current_time}")
+        logger.info(f"✅ Sent {notification_count} premium notifications at {current_time.strftime('%I:%M %p')}")
         
     except Exception as e:
-        logger.error(f"Error in notification job: {e}")
+        logger.error(f"🚨 Notification system error: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     
-    # Store user info
+    # Initialize user data with Bengali language
     if user_id not in user_data:
         user_data[user_id] = {
-            'username': user.username,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'has_joined': False,
-            'last_notified': None
+            'name': user.full_name,
+            'join_date': datetime.now(TIMEZONE).strftime("%d-%m-%Y %I:%M %p"),
+            'status': 'pending'
         }
     
     if user_id == ADMIN_ID:
-        # Admin welcome message
+        # Premium admin panel
         keyboard = [
-            [InlineKeyboardButton("Admin Dashboard", callback_data="admin_dashboard")],
-            [InlineKeyboardButton("Open Mini App", url=MINI_APP_LINK)]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_html(
-            f"👑 <b>Welcome Admin {user.first_name}!</b>\n\n"
-            "You can access the admin dashboard to view bot statistics.",
-            reply_markup=reply_markup
-        )
-    else:
-        # Regular user welcome message with channel join requirement
-        keyboard = [
-            [InlineKeyboardButton("Join Our Channel", url=CHANNEL_LINK)],
-            [InlineKeyboardButton("I've Joined ✅", callback_data="check_join")]
+            [InlineKeyboardButton("📊 রিয়েল-টাইম স্ট্যাটস", callback_data="admin_stats")],
+            [InlineKeyboardButton("📢 ব্রডকাস্ট মেসেজ", callback_data="admin_broadcast")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_html(
-            f"👋 <b>Welcome {user.first_name}!</b>\n\n"
-            "To use this bot, please join our channel first:\n"
-            f"👉 {CHANNEL_LINK}\n\n"
-            "After joining, click the 'I've Joined' button below to continue.\n\n"
-            "💡 You'll receive regular reminders to help you earn more!",
+        await update.message.reply_photo(
+            photo="https://i.imgur.com/JqYe5Zn.jpg",  # Premium banner image
+            caption=f"🌟 <b>অ্যাডমিন ড্যাশবোর্ডে স্বাগতম</b> 🌟\n\n"
+                   f"👑 আপনার বট বর্তমানে {len(active_users)} জন অ্যাক্টিভ ইউজার সেবা দিচ্ছে!\n\n"
+                   "নিচের অপশনগুলো থেকে নির্বাচন করুন:",
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+    else:
+        # Premium user onboarding
+        keyboard = [
+            [InlineKeyboardButton("🔗 চ্যানেল জয়েন করুন", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ জয়েন সম্পন্ন", callback_data="verify_join")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_photo(
+            photo="https://i.imgur.com/5XZwzP9.jpg",  # Welcome banner
+            caption=f"🎉 <b>স্বাগতম {user.first_name}!</b> 🎉\n\n"
+                   "আমাদের আয়ের প্ল্যাটফর্ম ব্যবহার করতে:\n"
+                   "1. প্রথমে আমাদের চ্যানেল জয়েন করুন\n"
+                   "2. তারপর নিচে 'জয়েন সম্পন্ন' বাটনে ক্লিক করুন\n\n"
+                   f"🔗 চ্যানেল লিংক: {CHANNEL_LINK}",
+            parse_mode="HTML",
             reply_markup=reply_markup
         )
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     
     await query.answer()
     
-    if query.data == "check_join":
-        user_data[user_id]['has_joined'] = True
-        joined_users.add(user_id)
+    if query.data == "verify_join":
+        # In production, add actual channel verification here
+        user_data[user_id]['status'] = 'active'
+        active_users.add(user_id)
         
+        # Premium WebApp integration
         keyboard = [
-            [InlineKeyboardButton("Open Mini App Now", url=MINI_APP_LINK)]
+            [InlineKeyboardButton(
+                text="🚀 আয় শুরু করুন", 
+                web_app=WebAppInfo(url=MINI_APP_URL)
+            ],
+            [InlineKeyboardButton(
+                text="📱 অ্যাপ ওপেন করুন", 
+                url=MINI_APP_URL)
+            ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            "✅ Thank you for joining our channel!\n\n"
-            "Now you can access our mini app:\n"
-            f"{MINI_APP_LINK}\n\n"
-            "⏰ You'll receive automatic reminders every 5 minutes to maximize your earnings!",
+        await query.edit_message_caption(
+            caption=f"🎊 <b>ধন্যবাদ {query.from_user.first_name}!</b> 🎊\n\n"
+                   "✅ আপনি এখন আমাদের সম্পূর্ণ সিস্টেম এক্সেস করতে পারবেন!\n\n"
+                   "আপনি প্রতি ৫ মিনিট পরপর আয়ের রিমাইন্ডার পাবেন।\n\n"
+                   "নিচের বাটন ক্লিক করে এখনই আয় শুরু করুন:",
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if user_id != ADMIN_ID:
+        await query.answer("⚠️ অননুমোদিত অ্যাক্সেস!")
+        return
+    
+    await query.answer()
+    
+    if query.data == "admin_stats":
+        # Premium admin statistics
+        stats_text = (
+            f"📈 <b>রিয়েল-টাইম স্ট্যাটিস্টিক্স</b>\n\n"
+            f"👥 মোট ইউজার: {len(user_data)}\n"
+            f"✅ অ্যাক্টিভ ইউজার: {len(active_users)}\n"
+            f"⏳ পেন্ডিং ইউজার: {len(user_data) - len(active_users)}\n\n"
+            f"🔄 শেষ নোটিফিকেশন: {datetime.now(TIMEZONE).strftime('%I:%M %p')}\n"
+            f"🔔 পরবর্তী নোটিফিকেশন: {(datetime.now(TIMEZONE) + timedelta(seconds=NOTIFICATION_INTERVAL)).strftime('%I:%M %p')}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 রিফ্রেশ", callback_data="admin_stats")],
+            [InlineKeyboardButton("🔙 ব্যাক", callback_data="admin_back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_caption(
+            caption=stats_text,
+            parse_mode="HTML",
             reply_markup=reply_markup
         )
     
-    elif query.data == "admin_dashboard" and user_id == ADMIN_ID:
-        total_users = len(user_data)
-        active_users = len(joined_users)
+    elif query.data == "admin_back":
+        # Return to main admin menu
+        keyboard = [
+            [InlineKeyboardButton("📊 রিয়েল-টাইম স্ট্যাটস", callback_data="admin_stats")],
+            [InlineKeyboardButton("📢 ব্রডকাস্ট মেসেজ", callback_data="admin_broadcast")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            f"📊 <b>Admin Dashboard</b>\n\n"
-            f"👥 Total Users: {total_users}\n"
-            f"✅ Active Users: {active_users}\n"
-            f"❌ Pending Users: {total_users - active_users}\n\n"
-            "Notifications are automatically sent every 5 minutes to all active users.",
-            parse_mode="HTML"
+        await query.edit_message_caption(
+            caption="🌟 <b>অ্যাডমিন ড্যাশবোর্ডে ফিরে আসার জন্য স্বাগতম</b> 🌟\n\n"
+                   "নিচের অপশনগুলো থেকে নির্বাচন করুন:",
+            parse_mode="HTML",
+            reply_markup=reply_markup
         )
 
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("You are not authorized to use this command.")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Usage: /broadcast <message>")
-        return
-    
-    message = " ".join(context.args)
-    success = 0
-    failed = 0
-    
-    for uid in user_data:
-        try:
-            await context.bot.send_message(uid, f"📢 Admin Broadcast:\n\n{message}")
-            success += 1
-        except Exception as e:
-            logger.error(f"Failed to send to {uid}: {e}")
-            failed += 1
-    
-    await update.message.reply_text(
-        f"Broadcast completed!\n"
-        f"✅ Success: {success}\n"
-        f"❌ Failed: {failed}"
-    )
-
 def main():
-    # Create the Application
+    # Create premium application
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Add handlers
+    # Add premium handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("broadcast", broadcast))
-    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(CallbackQueryHandler(handle_verification, pattern="^verify_join$"))
+    application.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_"))
     
-    # Schedule the notification job
+    # Start notification system
     job_queue = application.job_queue
     job_queue.run_repeating(
-        send_notifications,
+        send_premium_notifications,
         interval=NOTIFICATION_INTERVAL,
-        first=10  # Start after 10 seconds
+        first=15
     )
     
-    # Run the bot
-    application.run_polling()
+    # Run premium bot
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
