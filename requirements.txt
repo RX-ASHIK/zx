@@ -1,0 +1,1 @@
+aiogram==3.4.1\naiosqlite==0.20.0\npython-dotenv==1.0.1\n
